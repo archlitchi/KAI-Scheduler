@@ -6,12 +6,18 @@ package capacity_policy
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	commonconstants "github.com/NVIDIA/KAI-scheduler/pkg/common/constants"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/common_info"
-	"github.com/NVIDIA/KAI-scheduler/pkg/scheduler/api/podgroup_info"
-	rs "github.com/NVIDIA/KAI-scheduler/pkg/scheduler/plugins/proportion/resource_share"
+	"reflect"
+
+	"github.com/kai-scheduler/KAI-scheduler/pkg/apis/scheduling/v2alpha2"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/common/constants"
+	commonconstants "github.com/kai-scheduler/KAI-scheduler/pkg/common/constants"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/common_info"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/api/podgroup_info"
+	rs "github.com/kai-scheduler/KAI-scheduler/pkg/scheduler/plugins/proportion/resource_share"
 )
 
 var _ = Describe("Max Allowed Policy Check", func() {
@@ -205,10 +211,11 @@ var _ = Describe("Max Allowed Policy Check", func() {
 	Describe("resultsOverLimit", func() {
 		Context("resultsOverLimit tests", func() {
 			tests := map[string]struct {
-				queues         map[common_info.QueueID]*rs.QueueAttributes
-				job            *podgroup_info.PodGroupInfo
-				requestedShare rs.ResourceQuantities
-				expectedResult bool
+				queues          map[common_info.QueueID]*rs.QueueAttributes
+				job             *podgroup_info.PodGroupInfo
+				requestedShare  rs.ResourceQuantities
+				expectedResult  bool
+				expectedDetails *v2alpha2.QuotaDetails // optional, only compare if set
 			}{
 				"single queue - unlimited queue": {
 					queues: map[common_info.QueueID]*rs.QueueAttributes{
@@ -228,7 +235,7 @@ var _ = Describe("Max Allowed Policy Check", func() {
 					},
 					job: &podgroup_info.PodGroupInfo{
 						Name:      "job-a",
-						Namespace: "runai-team-a",
+						Namespace: "team-a",
 						Queue:     "queue1",
 					},
 					requestedShare: rs.ResourceQuantities{
@@ -254,7 +261,7 @@ var _ = Describe("Max Allowed Policy Check", func() {
 					},
 					job: &podgroup_info.PodGroupInfo{
 						Name:      "job-a",
-						Namespace: "runai-team-a",
+						Namespace: "team-a",
 						Queue:     "queue1",
 					},
 					requestedShare: rs.ResourceQuantities{
@@ -280,13 +287,46 @@ var _ = Describe("Max Allowed Policy Check", func() {
 					},
 					job: &podgroup_info.PodGroupInfo{
 						Name:      "job-a",
-						Namespace: "runai-team-a",
+						Namespace: "team-a",
 						Queue:     "queue1",
 					},
 					requestedShare: rs.ResourceQuantities{
 						rs.GpuResource: 3,
 					},
 					expectedResult: false,
+				},
+				"single queue - limited queue - results above limit 0 allocated": {
+					queues: map[common_info.QueueID]*rs.QueueAttributes{
+						"queue1": {
+							UID:               "queue1",
+							Name:              "queue1",
+							ParentQueue:       "",
+							ChildQueues:       nil,
+							CreationTimestamp: metav1.Time{},
+							QueueResourceShare: rs.QueueResourceShare{
+								GPU: rs.ResourceShare{
+									MaxAllowed: 3,
+									Allocated:  0,
+								},
+							},
+						},
+					},
+					job: &podgroup_info.PodGroupInfo{
+						Name:      "job-a",
+						Namespace: "team-a",
+						Queue:     "queue1",
+					},
+					requestedShare: rs.ResourceQuantities{
+						rs.GpuResource: 4,
+					},
+					expectedResult: false,
+					expectedDetails: &v2alpha2.QuotaDetails{
+						QueueAllocatedResources: v1.ResourceList{
+							v1.ResourceCPU:              *resource.NewMilliQuantity(0, resource.DecimalSI),
+							v1.ResourceMemory:           *resource.NewQuantity(0, resource.DecimalSI),
+							constants.NvidiaGpuResource: *resource.NewQuantity(0, resource.DecimalSI),
+						},
+					},
 				},
 				"multiple queues - limited queues - results below limit": {
 					queues: map[common_info.QueueID]*rs.QueueAttributes{
@@ -332,7 +372,7 @@ var _ = Describe("Max Allowed Policy Check", func() {
 					},
 					job: &podgroup_info.PodGroupInfo{
 						Name:      "job-a",
-						Namespace: "runai-team-a",
+						Namespace: "team-a",
 						Queue:     "leaf-queue",
 					},
 					requestedShare: rs.ResourceQuantities{
@@ -384,7 +424,7 @@ var _ = Describe("Max Allowed Policy Check", func() {
 					},
 					job: &podgroup_info.PodGroupInfo{
 						Name:      "job-a",
-						Namespace: "runai-team-a",
+						Namespace: "team-a",
 						Queue:     "leaf-queue",
 					},
 					requestedShare: rs.ResourceQuantities{
@@ -398,9 +438,21 @@ var _ = Describe("Max Allowed Policy Check", func() {
 				testName := name
 				testData := data
 				It(testName, func() {
-					capacityPolicy := New(testData.queues, true)
+					capacityPolicy := New(testData.queues)
 					result := capacityPolicy.resultsOverLimit(testData.requestedShare, testData.job)
 					Expect(result.IsSchedulable).To(Equal(testData.expectedResult))
+					if testData.expectedDetails != nil {
+						expectedValues := reflect.ValueOf(*testData.expectedDetails)
+						resultValues := reflect.ValueOf(*result.Details.QueueDetails)
+						for i := 0; i < expectedValues.NumField(); i++ {
+							xField := expectedValues.Field(i).Interface()
+							yField := resultValues.Field(i).Interface()
+							zero := reflect.Zero(expectedValues.Field(i).Type()).Interface()
+							if !reflect.DeepEqual(xField, zero) {
+								Expect(xField).To(Equal(yField))
+							}
+						}
+					}
 				})
 			}
 

@@ -19,8 +19,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	"github.com/NVIDIA/KAI-scheduler/pkg/binder/binding/resourcereservation"
-	"github.com/NVIDIA/KAI-scheduler/pkg/common/resources"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/binder/binding/resourcereservation"
+	"github.com/kai-scheduler/KAI-scheduler/pkg/common/resources"
 )
 
 // PodReconciler reconciles a Pod object
@@ -63,6 +63,7 @@ func (r *PodReconciler) SetupWithManager(
 				time.Duration(params.RateLimiterBaseDelaySeconds)*time.Second,
 				time.Duration(params.RateLimiterMaxDelaySeconds)*time.Second,
 			),
+			SkipNameValidation: &[]bool{true}[0],
 		}).
 		Owns(&corev1.ConfigMap{}).
 		Complete(r)
@@ -71,14 +72,14 @@ func (r *PodReconciler) SetupWithManager(
 func (r *PodReconciler) eventHandlers() handler.Funcs {
 	return handler.Funcs{
 		CreateFunc: func(ctx context.Context, createEvent event.CreateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-			if !r.isRunAiPod(createEvent.Object) {
+			if !r.isRelevantPod(createEvent.Object) {
 				return
 			}
 			h := handler.EnqueueRequestForObject{}
 			h.Create(ctx, createEvent, q)
 		},
 		UpdateFunc: func(ctx context.Context, updateEvent event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-			if !r.isRunAiPod(updateEvent.ObjectNew) {
+			if !r.isRelevantPod(updateEvent.ObjectNew) {
 				return
 			}
 			if isCompletionEvent(updateEvent.ObjectOld, updateEvent.ObjectNew) {
@@ -88,7 +89,7 @@ func (r *PodReconciler) eventHandlers() handler.Funcs {
 			h.Update(ctx, updateEvent, q)
 		},
 		DeleteFunc: func(ctx context.Context, deleteEvent event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-			if !r.isRunAiPod(deleteEvent.Object) {
+			if !r.isRelevantPod(deleteEvent.Object) {
 				return
 			}
 			r.syncReservationIfNeeded(ctx, deleteEvent.Object)
@@ -97,7 +98,7 @@ func (r *PodReconciler) eventHandlers() handler.Funcs {
 			h.Delete(ctx, deleteEvent, q)
 		},
 		GenericFunc: func(ctx context.Context, genericEvent event.GenericEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-			if !r.isRunAiPod(genericEvent.Object) {
+			if !r.isRelevantPod(genericEvent.Object) {
 				return
 			}
 			h := handler.EnqueueRequestForObject{}
@@ -126,7 +127,7 @@ func (r *PodReconciler) syncReservationIfNeeded(ctx context.Context, object clie
 	}
 }
 
-func (r *PodReconciler) isRunAiPod(object client.Object) bool {
+func (r *PodReconciler) isRelevantPod(object client.Object) bool {
 	pod, isPod := object.(*corev1.Pod)
 	if isPod {
 		return pod.Spec.SchedulerName == r.SchedulerName

@@ -7,34 +7,25 @@ package feature_flags
 import (
 	"context"
 	"fmt"
-	"strings"
 
-	"github.com/NVIDIA/KAI-scheduler/test/e2e/modules/constant"
-	testcontext "github.com/NVIDIA/KAI-scheduler/test/e2e/modules/context"
-	"github.com/NVIDIA/KAI-scheduler/test/e2e/modules/wait"
+	"github.com/kai-scheduler/KAI-scheduler/test/e2e/modules/configurations"
+	testcontext "github.com/kai-scheduler/KAI-scheduler/test/e2e/modules/context"
+	"github.com/kai-scheduler/KAI-scheduler/test/e2e/modules/testconfig"
+	"github.com/kai-scheduler/KAI-scheduler/test/e2e/modules/wait"
+	"k8s.io/utils/ptr"
 )
 
 func SetFullHierarchyFairness(
 	ctx context.Context, testCtx *testcontext.TestContext, value *bool,
 ) error {
-	return wait.PatchSystemDeploymentFeatureFlags(
-		ctx,
-		testCtx.KubeClientset,
-		testCtx.ControllerClient,
-		constant.SystemPodsNamespace,
-		constant.SchedulerDeploymentName,
-		constant.SchedulerContainerName,
-		func(args []string) []string {
-			if value != nil {
-				return append(args, fmt.Sprintf("--full-hierarchy-fairness=%t", *value))
-			}
-			for i, arg := range args {
-				if strings.HasPrefix(arg, "--full-hierarchy-fairness=") {
-					return append(args[:i], args[i+1:]...)
-				}
-			}
-			return args
-		},
-	)
-
+	var targetValue *string = nil
+	if value != nil {
+		targetValue = ptr.To(fmt.Sprint(*value))
+	}
+	if err := configurations.SetShardArg(ctx, testCtx, "default", "full-hierarchy-fairness", targetValue); err != nil {
+		return err
+	}
+	cfg := testconfig.GetConfig()
+	wait.WaitForDeploymentPodsRunning(ctx, testCtx.ControllerClient, cfg.SchedulerDeploymentName, cfg.SystemPodsNamespace)
+	return nil
 }
